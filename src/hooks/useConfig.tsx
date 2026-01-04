@@ -31,10 +31,13 @@ export type AppConfig = {
   agent_dispatch?: PartialMessage<RoomAgentDispatch>;
 };
 
+export type VoiceOption = "aria" | "c3po" | "barry" | "hannah" | "sarah" | "leo";
+
 export type UserSettings = {
   editable: boolean;
   theme_color: string;
   chat: boolean;
+  voice: VoiceOption;
   inputs: {
     camera: boolean;
     screen: boolean;
@@ -55,6 +58,7 @@ const defaultConfig: AppConfig = {
     editable: true,
     theme_color: "cyan",
     chat: true,
+    voice: "aria",
     inputs: {
       camera: true,
       screen: true,
@@ -120,6 +124,7 @@ export const ConfigProvider = ({ children }: { children: React.ReactNode }) => {
       editable: true,
       chat: params.get("chat") === "1",
       theme_color: params.get("theme_color"),
+      voice: (params.get("voice") as VoiceOption) || "aria",
       inputs: {
         camera: params.get("cam") === "1",
         screen: params.get("screen") === "1",
@@ -155,6 +160,7 @@ export const ConfigProvider = ({ children }: { children: React.ReactNode }) => {
         audio: boolToString(us.outputs.audio),
         chat: boolToString(us.chat),
         theme_color: us.theme_color || "cyan",
+        voice: us.voice || "aria",
       });
       router.replace("/#" + obj.toString());
     },

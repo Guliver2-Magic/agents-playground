@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package chatterbox;
+
+// Service de synthèse vocale streaming
+service ChatterboxTTS {
+  // Synthèse avec streaming (audio chunks progressifs)
+  rpc SynthesizeStream(SynthesizeRequest) returns (stream AudioChunk);
+
+  // Synthèse complète (retourne tout l'audio d'un coup)
+  rpc Synthesize(SynthesizeRequest) returns (AudioResponse);
+
+  // Health check
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+// Requête de synthèse
+message SynthesizeRequest {
+  string text = 1;                  // Texte à synthétiser
+  string voice = 2;                 // Fichier voix (hal_combined_44k.wav, c3po_*, barry_*)
+  string language = 3;              // Code langue (fr, en, es)
+  float temperature = 4;            // Randomness (0.0-1.0, défaut 0.5)
+  float speed_factor = 5;           // Vitesse de parole (défaut 1.0)
+  int32 sample_rate = 6;            // Taux d'échantillonnage (22050, 44100)
+  AudioFormat format = 7;           // Format audio (WAV, PCM, MP3)
+  bool stream = 8;                  // Enable streaming (défaut true)
+}
+
+// Format audio
+enum AudioFormat {
+  PCM_16 = 0;     // PCM 16-bit (brut, pas de header)
+  WAV = 1;        // WAV avec header
+  MP3 = 2;        // MP3 compressé
+}
+
+// Chunk audio streamé
+message AudioChunk {
+  bytes audio_data = 1;             // Données audio PCM 16-bit
+  int32 chunk_index = 2;            // Index du chunk (0, 1, 2, ...)
+  bool is_final = 3;                // True si dernier chunk
+  int32 sample_rate = 4;            // Taux d'échantillonnage
+  int32 duration_ms = 5;            // Durée de ce chunk en ms
+}
+
+// Réponse audio complète (non-streaming)
+message AudioResponse {
+  bytes audio_data = 1;             // Audio complet
+  int32 sample_rate = 2;            // Taux d'échantillonnage
+  int32 duration_ms = 3;            // Durée totale en ms
+  AudioFormat format = 4;           // Format retourné
+}
+
+// Ping request/response (health check)
+message PingRequest {}
+message PingResponse {
+  string status = 1;                // "ok"
+  string version = 2;               // Version du serveur
+}

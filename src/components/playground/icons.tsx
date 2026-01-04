@@ -22,13 +22,13 @@ export const CheckIcon = () => (
   </svg>
 );
 
-export const ChevronIcon = () => (
+export const ChevronIcon = ({ className }: { className?: string }) => (
   <svg
     width="16"
     height="16"
     fill="none"
     xmlns="http://www.w3.org/2000/svg"
-    className="fill-gray-200 transition-all group-hover:fill-white group-data-[state=open]:rotate-180"
+    className={`fill-gray-200 transition-all group-hover:fill-white group-data-[state=open]:rotate-180 ${className || ""}`}
   >
     <path
       fillRule="evenodd"

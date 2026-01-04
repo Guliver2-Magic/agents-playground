@@ -2,17 +2,20 @@ import { NextApiRequest, NextApiResponse } from "next";
 
 import { TokenSourceRequestPayload } from "livekit-client";
 import { AccessToken } from "livekit-server-sdk";
-import { RoomConfiguration } from "@livekit/protocol";
+import { RoomConfiguration, RoomAgentDispatch } from "@livekit/protocol";
 
 const apiKey = process.env.LIVEKIT_API_KEY;
 const apiSecret = process.env.LIVEKIT_API_SECRET;
 
 type TokenRequest = {
-  room_name: string;
-  participant_identity: string;
+  room_name?: string;
+  roomName?: string;
+  participant_identity?: string;
+  participantName?: string;
   participant_name?: string;
   participant_metadata?: string;
   participant_attributes?: Record<string, string>;
+  participantAttributes?: Record<string, string>;  // camelCase variant
   room_config?: ReturnType<RoomConfiguration["toJson"]>;
 };
 
@@ -46,12 +49,24 @@ async function createToken(request: TokenRequest) {
   if (request.participant_metadata) {
     at.metadata = request.participant_metadata;
   }
-  if (request.participant_attributes) {
-    at.attributes = request.participant_attributes;
+  // Support both snake_case and camelCase for participant attributes
+  const attributes = request.participant_attributes || request.participantAttributes;
+  if (attributes) {
+    at.attributes = attributes;
   }
-  if (request.room_config) {
-    at.roomConfig = RoomConfiguration.fromJson(request.room_config);
-  }
+  // Explicit agent dispatch - only dispatch "voice-agent" to prevent ghost workers
+  const voiceMetadata = attributes?.voice
+    ? JSON.stringify({ voice: attributes.voice })
+    : "{}";
+
+  at.roomConfig = new RoomConfiguration({
+    agents: [
+      new RoomAgentDispatch({
+        agentName: "voice-agent",
+        metadata: voiceMetadata,
+      }),
+    ],
+  });
 
   return at.toJwt();
 }

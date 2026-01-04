@@ -19,16 +19,21 @@ import logging
 import os
 import sys
 
-# Add c3po-v3 pipecat-service to path
-sys.path.insert(0, '/opt/stacks/c3po-v3/pipecat-service')
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv()
 
-from livekit.agents import AutoSubscribe, JobContext, WorkerOptions, cli
-from livekit.agents.worker import WorkerType
+# Add c3po-v3 pipecat-service to path
+# Using local agents folder
+
+from livekit.agents import JobContext, JobProcess, AutoSubscribe, AgentServer, cli
 from livekit.agents import voice
 
 # Import our LocalVoiceAgent
-from app.agents.local_voice_agent import create_local_agent
-from app.agents.rpc_handlers import register_rpc_methods
+from agents.local_voice_agent import create_local_agent
+from agents.rpc_handlers import register_rpc_methods
+from agents.vision_module import get_proactive_context, get_vision
+from agents.memory_module import get_memory, inject_memory_context
 
 # Configure logging
 logging.basicConfig(
@@ -37,13 +42,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Create AgentServer instance
+server = AgentServer()
 
+
+@server.rtc_session(agent_name="voice-agent")
 async def entrypoint(ctx: JobContext):
     """
     Entry point for LiveKit Agent jobs.
 
-    This function is called whenever a participant joins a room.
-    It creates and starts our LocalVoiceAgent.
+    This function is called whenever a participant joins a NEW room.
+    The @server.rtc_session() decorator enables automatic dispatch.
     """
     logger.info(f"Connecting to room: {ctx.room.name}")
 
@@ -55,10 +64,31 @@ async def entrypoint(ctx: JobContext):
     # Register RPC methods for direct function tool invocation from frontend
     register_rpc_methods(ctx.room.local_participant)
     logger.info("✓ RPC methods registered")
+    logger.info(f"🆔 Agent identity: {ctx.room.local_participant.identity}")
 
-    # Get configuration from environment or use defaults
-    persona = os.getenv("VOICE_PERSONA", "aria")  # aria, c3po, barry
+    # Get voice setting from job metadata (set via explicit dispatch)
+    persona = os.getenv("VOICE_PERSONA", "aria")  # default
     language = os.getenv("VOICE_LANGUAGE", "fr")  # fr, en, es, auto
+
+    # Read voice from job metadata (passed via RoomAgentDispatch)
+    if ctx.job and ctx.job.metadata:
+        try:
+            import json
+            job_meta = json.loads(ctx.job.metadata)
+            if "voice" in job_meta:
+                persona = job_meta["voice"]
+                logger.info(f"🎤 Voice from job metadata: {persona}")
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Fallback: check participant attributes
+    if persona == os.getenv("VOICE_PERSONA", "aria"):
+        for participant in ctx.room.remote_participants.values():
+            voice_attr = participant.attributes.get("voice")
+            if voice_attr:
+                persona = voice_attr
+                logger.info(f"🎤 Voice from participant: {persona}")
+                break
 
     logger.info(f"Creating LocalVoiceAgent: persona={persona}, language={language}")
 
@@ -70,10 +100,50 @@ async def entrypoint(ctx: JobContext):
 
     logger.info("✓ LocalVoiceAgent created")
     logger.info("  - STT: Faster-Whisper (large-v3)")
-    logger.info("  - LLM: Mistral Nemo (12B)")
-    logger.info("  - TTS: Chatterbox gRPC (streaming)")
+
+    # Log LLM source
+    llm_model = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+    if os.getenv("OPENROUTER_API_KEY"):
+        logger.info(f"  - LLM: {llm_model} (OpenRouter, ~100-200ms)")
+    elif os.getenv("OPENAI_API_KEY"):
+        logger.info("  - LLM: GPT-4o-mini (OpenAI, ~150ms)")
+    else:
+        logger.info("  - LLM: Llama 3.2 3B (Ollama local, ~400ms)")
+
+    # Log TTS source
+    if os.getenv("CARTESIA_API_KEY"):
+        logger.info("  - TTS: Cartesia Sonic-2 (streaming, ~100ms TTFB)")
+    else:
+        logger.info("  - TTS: F5-TTS (local)")
+
     logger.info("  - VAD: Silero")
     logger.info("  - Functions: 10 tools (34 skills)")
+    logger.info("  - Vision: YOLO + Face Recognition")
+    logger.info("  - Memory: PostgreSQL (persistent)")
+
+    # Initialize conversation memory
+    memory = get_memory()
+    await memory.connect()
+    await memory.start_conversation(client_type="web", language=language)
+    logger.info("  - Conversation started in database")
+
+    # Get memory context from past conversations
+    memory_context = await memory.get_memory_context()
+    memory_prompt = memory_context.to_prompt()
+    if memory_prompt:
+        logger.info(f"  - Memory context: {memory_prompt[:50]}...")
+
+    # Get proactive visual context (master greeting, Buddy alerts)
+    proactive_context = await get_proactive_context()
+    if proactive_context:
+        logger.info(f"  - Proactive context: {proactive_context}")
+
+    # Enhance instructions with memory and visual context
+    enhanced_instructions = agent.instructions
+    if memory_prompt:
+        enhanced_instructions = f"{enhanced_instructions}\n\n[Memory Context] {memory_prompt}"
+    if proactive_context:
+        enhanced_instructions = f"{enhanced_instructions}\n\n[Visual Context] {proactive_context}"
 
     # Create voice.Agent configuration object with all nodes and instructions
     # The LocalVoiceAgent provides the nodes, but we need a voice.Agent for the session
@@ -83,12 +153,11 @@ async def entrypoint(ctx: JobContext):
         stt=agent.stt_node(),
         llm=agent.llm_node(),
         tts=agent.tts_node(),
-        instructions=agent.instructions,
-        tools=agent.tools,  # FIX: Propagate function tools to voice.Agent
+        instructions=enhanced_instructions,
+        tools=agent.tools,  # Propagate function tools to voice.Agent
     )
 
     # Create AgentSession and start with the Agent object
-    # Signature: start(self, agent: 'Agent', *, room=..., ...)
     session = voice.AgentSession()
     await session.start(voice_agent, room=ctx.room)
 
@@ -106,11 +175,7 @@ async def entrypoint(ctx: JobContext):
 
 
 if __name__ == "__main__":
-    # Run the LiveKit agent worker
-    cli.run_app(
-        WorkerOptions(
-            entrypoint_fnc=entrypoint,
-            # Worker will handle room-based jobs (participant connections)
-            worker_type=WorkerType.ROOM,
-        )
-    )
+    # Run the LiveKit agent server
+    # The AgentServer with @server.rtc_session() decorator enables auto-dispatch
+    # Without agent_name parameter, the agent automatically joins all new rooms
+    cli.run_app(server)

@@ -13,6 +13,7 @@ import {
   PlaygroundTile,
 } from "@/components/playground/PlaygroundTile";
 import { useConfig } from "@/hooks/useConfig";
+import { useAgentParticipant } from "@/hooks/useAgentParticipant";
 import {
   BarVisualizer,
   VideoTrack,
@@ -67,24 +68,36 @@ export default function Playground({
   const [rpcPayload, setRpcPayload] = useState("");
   const [hasConnected, setHasConnected] = useState(false);
 
-  const [tokenFetchOptions, setTokenFetchOptions] = useState<TokenSourceFetchOptions>();
+  // Initialize tokenFetchOptions with voice setting immediately
+  const [tokenFetchOptions, setTokenFetchOptions] = useState<TokenSourceFetchOptions>(() => ({
+    agentName: initialAgentOptions?.agentName ?? "",
+    agentMetadata: initialAgentOptions?.metadata ?? "",
+    participantAttributes: {
+      voice: config.settings.voice || "aria",
+    },
+  }));
 
-  // initialize token fetch options from initial values, which can come from config
+  // Sync voice setting to participant attributes when it changes
   useEffect(() => {
-    // set initial options only if they haven't been set yet
-    if (tokenFetchOptions !== undefined || initialAgentOptions === undefined) {
-      return;
-    }
-    setTokenFetchOptions({
-      agentName: initialAgentOptions?.agentName ?? "",
-      agentMetadata: initialAgentOptions?.metadata ?? "",
-    });
-  }, [tokenFetchOptions, initialAgentOptions, initialAgentOptions?.agentName, initialAgentOptions?.metadata]);
+    setTokenFetchOptions((prev) => ({
+      ...prev,
+      participantAttributes: {
+        ...prev.participantAttributes,
+        voice: config.settings.voice || "aria",
+      },
+    }));
+  }, [config.settings.voice]);
 
   const session = useSession(tokenSource, tokenFetchOptions);
   const { connectionState } = session;
   const agent = useAgent(session);
   const messages = useSessionMessages(session);
+
+  // Use hook for reliable agent participant discovery
+  const agentParticipant = useAgentParticipant(
+    session.room,
+    agent.internal.agentParticipant ?? undefined
+  );
 
   const localScreenTrack = session.room.localParticipant.getTrackPublication(
     Track.Source.ScreenShare,
@@ -226,22 +239,30 @@ export default function Playground({
     messages.send,
   ]);
 
-  const handleRpcCall = useCallback(async () => {
-    if (!agent.internal.agentParticipant) {
-      throw new Error("No agent or room available");
+  const handleRpcCall = useCallback(async (method?: string, payload?: string) => {
+    if (!agentParticipant) {
+      throw new Error("No agent participant found. Please wait for agent to connect.");
     }
 
-    const response = await session.room.localParticipant.performRpc({
-      destinationIdentity: agent.internal.agentParticipant.identity,
-      method: rpcMethod,
-      payload: rpcPayload,
+    console.log('🔧 RPC Call Debug:', {
+      destinationIdentity: agentParticipant.identity,
+      method: method || rpcMethod,
+      payload: payload || rpcPayload,
     });
+
+    const response = await session.room.localParticipant.performRpc({
+      destinationIdentity: agentParticipant.identity,
+      method: method || rpcMethod,
+      payload: payload || rpcPayload,
+    });
+
+    console.log('✅ RPC Response:', response);
     return response;
   }, [
-    session.room.localParticipant,
+    session.room,
     rpcMethod,
     rpcPayload,
-    agent.internal.agentParticipant,
+    agentParticipant,
   ]);
 
   const agentAttributes = useParticipantAttributes({
@@ -448,7 +469,7 @@ export default function Playground({
               )}
             </ConfigurationPanelItem>
           )}
-        {connectionState === ConnectionState.Connected && agent.isConnected && (
+        {connectionState === ConnectionState.Connected && (
           <RpcPanel
             config={config}
             rpcMethod={rpcMethod}
