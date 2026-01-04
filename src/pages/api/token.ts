@@ -55,9 +55,19 @@ async function createToken(request: TokenRequest) {
     at.attributes = attributes;
   }
   // Explicit agent dispatch - only dispatch "voice-agent" to prevent ghost workers
-  const voiceMetadata = attributes?.voice
-    ? JSON.stringify({ voice: attributes.voice })
-    : "{}";
+  // Include voice and TTS settings in metadata for the agent
+  const voiceMetadata = JSON.stringify({
+    voice: attributes?.voice || "aria",
+    ttsProvider: attributes?.ttsProvider || "cartesia",
+    kokoroVoice: attributes?.kokoroVoice || "af_heart",
+  });
+
+  console.log("📥 TTS Settings:", {
+    voice: attributes?.voice,
+    ttsProvider: attributes?.ttsProvider,
+    kokoroVoice: attributes?.kokoroVoice,
+    metadata: voiceMetadata
+  });
 
   at.roomConfig = new RoomConfiguration({
     agents: [

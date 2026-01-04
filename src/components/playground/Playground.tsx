@@ -55,38 +55,65 @@ export interface PlaygroundProps {
 
 const headerHeight = 56;
 
-export default function Playground({
+// Inner component that uses the session - only rendered after config is loaded
+function PlaygroundInner({
   logo,
   themeColors,
   tokenSource,
-  agentOptions: initialAgentOptions,
+  initialAgentOptions,
   autoConnect,
-}: PlaygroundProps) {
-  const { config, setUserSettings } = useConfig();
-
+  config,
+  setUserSettings,
+}: PlaygroundProps & {
+  initialAgentOptions?: PartialMessage<RoomAgentDispatch>;
+  config: ReturnType<typeof useConfig>["config"];
+  setUserSettings: ReturnType<typeof useConfig>["setUserSettings"];
+}) {
   const [rpcMethod, setRpcMethod] = useState("");
   const [rpcPayload, setRpcPayload] = useState("");
   const [hasConnected, setHasConnected] = useState(false);
 
-  // Initialize tokenFetchOptions with voice setting immediately
-  const [tokenFetchOptions, setTokenFetchOptions] = useState<TokenSourceFetchOptions>(() => ({
-    agentName: initialAgentOptions?.agentName ?? "",
-    agentMetadata: initialAgentOptions?.metadata ?? "",
-    participantAttributes: {
-      voice: config.settings.voice || "aria",
-    },
-  }));
+  // State for manual attribute/metadata overrides from UI
+  const [manualOverrides, setManualOverrides] = useState<{
+    participantAttributes?: Record<string, string>;
+    participantMetadata?: string;
+  }>({});
 
-  // Sync voice setting to participant attributes when it changes
-  useEffect(() => {
-    setTokenFetchOptions((prev) => ({
-      ...prev,
+  // Compute tokenFetchOptions from config settings merged with manual overrides
+  // Config is guaranteed to be loaded at this point
+  const tokenFetchOptions = useMemo<TokenSourceFetchOptions>(() => {
+    const baseAttributes = {
+      voice: config.settings.voice || "aria",
+      ttsProvider: config.settings.ttsProvider || "cartesia",
+      kokoroVoice: config.settings.kokoroVoice || "af_heart",
+    };
+    console.log("🔄 tokenFetchOptions (config loaded):", baseAttributes);
+    return {
+      agentName: initialAgentOptions?.agentName ?? "",
+      agentMetadata: initialAgentOptions?.metadata ?? "",
       participantAttributes: {
-        ...prev.participantAttributes,
-        voice: config.settings.voice || "aria",
+        ...baseAttributes,
+        ...manualOverrides.participantAttributes,
       },
-    }));
-  }, [config.settings.voice]);
+      participantMetadata: manualOverrides.participantMetadata,
+    };
+  }, [config.settings.voice, config.settings.ttsProvider, config.settings.kokoroVoice, initialAgentOptions, manualOverrides]);
+
+  // Helper to update tokenFetchOptions (for compatibility with existing UI)
+  const setTokenFetchOptions = useCallback((newOptions: TokenSourceFetchOptions | ((prev: TokenSourceFetchOptions) => TokenSourceFetchOptions)) => {
+    if (typeof newOptions === 'function') {
+      const computed = newOptions(tokenFetchOptions);
+      setManualOverrides({
+        participantAttributes: computed.participantAttributes,
+        participantMetadata: computed.participantMetadata,
+      });
+    } else {
+      setManualOverrides({
+        participantAttributes: newOptions.participantAttributes,
+        participantMetadata: newOptions.participantMetadata,
+      });
+    }
+  }, [tokenFetchOptions]);
 
   const session = useSession(tokenSource, tokenFetchOptions);
   const { connectionState } = session;
@@ -107,10 +134,16 @@ export default function Playground({
     if (session.isConnected) {
       return;
     }
+    console.log("🚀 Starting session with TTS settings:", {
+      voice: config.settings.voice,
+      ttsProvider: config.settings.ttsProvider,
+      kokoroVoice: config.settings.kokoroVoice,
+    });
     session.start();
     setHasConnected(true);
-  }, [session, session.isConnected]);
+  }, [session, session.isConnected, config.settings]);
 
+  // Auto-connect (config is guaranteed loaded at this point)
   useEffect(() => {
     if (autoConnect && !hasConnected) {
       startSession();
@@ -670,5 +703,41 @@ export default function Playground({
         <StartAudio label="Click to enable audio playback" />
       </div>
     </SessionProvider>
+  );
+}
+
+// Outer component that waits for config to load before rendering the session
+export default function Playground({
+  logo,
+  themeColors,
+  tokenSource,
+  agentOptions: initialAgentOptions,
+  autoConnect,
+}: PlaygroundProps) {
+  const { config, setUserSettings, configLoaded } = useConfig();
+
+  // Show loading state until config is loaded from cookies
+  if (!configLoaded) {
+    return (
+      <div className="flex items-center justify-center h-full w-full">
+        <div className="flex flex-col items-center gap-2 text-gray-500">
+          <LoadingSVG />
+          <span>Loading settings...</span>
+        </div>
+      </div>
+    );
+  }
+
+  // Once config is loaded, render the actual playground with correct settings
+  return (
+    <PlaygroundInner
+      logo={logo}
+      themeColors={themeColors}
+      tokenSource={tokenSource}
+      initialAgentOptions={initialAgentOptions}
+      autoConnect={autoConnect}
+      config={config}
+      setUserSettings={setUserSettings}
+    />
   );
 }

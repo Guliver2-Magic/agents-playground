@@ -66,11 +66,13 @@ async def entrypoint(ctx: JobContext):
     logger.info("✓ RPC methods registered")
     logger.info(f"🆔 Agent identity: {ctx.room.local_participant.identity}")
 
-    # Get voice setting from job metadata (set via explicit dispatch)
-    persona = os.getenv("VOICE_PERSONA", "aria")  # default
+    # Get voice and TTS settings from job metadata (set via explicit dispatch)
+    persona = os.getenv("VOICE_PERSONA", "aria")  # default Cartesia voice
     language = os.getenv("VOICE_LANGUAGE", "fr")  # fr, en, es, auto
+    tts_provider = "cartesia"  # default
+    kokoro_voice = "af_heart"  # default Kokoro voice
 
-    # Read voice from job metadata (passed via RoomAgentDispatch)
+    # Read settings from job metadata (passed via RoomAgentDispatch)
     if ctx.job and ctx.job.metadata:
         try:
             import json
@@ -78,6 +80,12 @@ async def entrypoint(ctx: JobContext):
             if "voice" in job_meta:
                 persona = job_meta["voice"]
                 logger.info(f"🎤 Voice from job metadata: {persona}")
+            if "ttsProvider" in job_meta:
+                tts_provider = job_meta["ttsProvider"]
+                logger.info(f"🔊 TTS provider from job metadata: {tts_provider}")
+            if "kokoroVoice" in job_meta:
+                kokoro_voice = job_meta["kokoroVoice"]
+                logger.info(f"🎵 Kokoro voice from job metadata: {kokoro_voice}")
         except (json.JSONDecodeError, TypeError):
             pass
 
@@ -88,14 +96,24 @@ async def entrypoint(ctx: JobContext):
             if voice_attr:
                 persona = voice_attr
                 logger.info(f"🎤 Voice from participant: {persona}")
-                break
+            tts_attr = participant.attributes.get("ttsProvider")
+            if tts_attr:
+                tts_provider = tts_attr
+                logger.info(f"🔊 TTS provider from participant: {tts_provider}")
+            kokoro_attr = participant.attributes.get("kokoroVoice")
+            if kokoro_attr:
+                kokoro_voice = kokoro_attr
+                logger.info(f"🎵 Kokoro voice from participant: {kokoro_voice}")
+            break
 
-    logger.info(f"Creating LocalVoiceAgent: persona={persona}, language={language}")
+    logger.info(f"Creating LocalVoiceAgent: persona={persona}, tts={tts_provider}, language={language}")
 
     # Create our local voice agent
     agent = create_local_agent(
         persona=persona,
-        language=language
+        language=language,
+        tts_provider=tts_provider,
+        kokoro_voice=kokoro_voice
     )
 
     logger.info("✓ LocalVoiceAgent created")
@@ -111,8 +129,10 @@ async def entrypoint(ctx: JobContext):
         logger.info("  - LLM: Llama 3.2 3B (Ollama local, ~400ms)")
 
     # Log TTS source
-    if os.getenv("CARTESIA_API_KEY"):
-        logger.info("  - TTS: Cartesia Sonic-2 (streaming, ~100ms TTFB)")
+    if tts_provider == "kokoro":
+        logger.info(f"  - TTS: Kokoro ({kokoro_voice}, local GPU, ~50ms TTFB)")
+    elif os.getenv("CARTESIA_API_KEY"):
+        logger.info(f"  - TTS: Cartesia Sonic-2 ({persona}, streaming, ~100ms TTFB)")
     else:
         logger.info("  - TTS: F5-TTS (local)")
 

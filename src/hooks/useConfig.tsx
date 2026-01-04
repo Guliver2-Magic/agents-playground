@@ -33,11 +33,19 @@ export type AppConfig = {
 
 export type VoiceOption = "aria" | "c3po" | "barry" | "hannah" | "sarah" | "leo";
 
+// TTS Provider options
+export type TtsProvider = "cartesia" | "kokoro";
+
+// Kokoro voice options (best quality voices)
+export type KokoroVoice = "af_heart" | "af_bella" | "bf_emma" | "ff_siwis" | "am_michael" | "bm_george";
+
 export type UserSettings = {
   editable: boolean;
   theme_color: string;
   chat: boolean;
   voice: VoiceOption;
+  ttsProvider: TtsProvider;
+  kokoroVoice: KokoroVoice;
   inputs: {
     camera: boolean;
     screen: boolean;
@@ -59,6 +67,8 @@ const defaultConfig: AppConfig = {
     theme_color: "cyan",
     chat: true,
     voice: "aria",
+    ttsProvider: "cartesia",
+    kokoroVoice: "af_heart",
     inputs: {
       camera: true,
       screen: true,
@@ -97,6 +107,7 @@ const useAppConfig = (): AppConfig => {
 type ConfigData = {
   config: AppConfig;
   setUserSettings: (settings: UserSettings) => void;
+  configLoaded: boolean;
 };
 
 const ConfigContext = createContext<ConfigData | undefined>(undefined);
@@ -125,6 +136,8 @@ export const ConfigProvider = ({ children }: { children: React.ReactNode }) => {
       chat: params.get("chat") === "1",
       theme_color: params.get("theme_color"),
       voice: (params.get("voice") as VoiceOption) || "aria",
+      ttsProvider: (params.get("tts") as TtsProvider) || "cartesia",
+      kokoroVoice: (params.get("kokoro_voice") as KokoroVoice) || "af_heart",
       inputs: {
         camera: params.get("cam") === "1",
         screen: params.get("screen") === "1",
@@ -161,6 +174,8 @@ export const ConfigProvider = ({ children }: { children: React.ReactNode }) => {
         chat: boolToString(us.chat),
         theme_color: us.theme_color || "cyan",
         voice: us.voice || "aria",
+        tts: us.ttsProvider || "cartesia",
+        kokoro_voice: us.kokoroVoice || "af_heart",
       });
       router.replace("/#" + obj.toString());
     },
@@ -209,6 +224,7 @@ export const ConfigProvider = ({ children }: { children: React.ReactNode }) => {
   ]);
 
   const [config, _setConfig] = useState<AppConfig>(defaultConfig);
+  const [configLoaded, setConfigLoaded] = useState(false);
 
   const setUserSettings = useCallback(
     (settings: UserSettings) => {
@@ -233,11 +249,12 @@ export const ConfigProvider = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     getConfig().then((config) => {
       _setConfig(config);
+      setConfigLoaded(true);
     });
   }, [getConfig]);
 
   return (
-    <ConfigContext.Provider value={{ config, setUserSettings }}>
+    <ConfigContext.Provider value={{ config, setUserSettings, configLoaded }}>
       {children}
     </ConfigContext.Provider>
   );

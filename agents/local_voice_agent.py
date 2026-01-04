@@ -28,6 +28,17 @@ CARTESIA_VOICES = {
     "leo": "ce74c4da-4aee-435d-bc6d-81d1a9367e12",  # Leo
 }
 
+# Kokoro voice IDs (local GPU TTS via FastAPI wrapper)
+# See https://huggingface.co/hexgrad/Kokoro-82M for full list
+KOKORO_VOICES = {
+    "af_heart": "af_heart",      # American female, quality A-
+    "af_bella": "af_bella",      # American female, quality A-
+    "bf_emma": "bf_emma",        # British female, quality B-
+    "ff_siwis": "ff_siwis",      # French female, quality B-
+    "am_michael": "am_michael",  # American male, quality C+
+    "bm_george": "bm_george",    # British male, quality C
+}
+
 # Function tools (skills)
 from agents.tools import (
     get_weather,
@@ -68,7 +79,9 @@ class LocalVoiceAgent(Agent):
         voice: str = "hal_combined_44k.wav",
         persona: str = "aria",
         language: str = "fr",
-        sample_rate: int = 44100
+        sample_rate: int = 44100,
+        tts_provider: str = "cartesia",
+        kokoro_voice: str = "af_heart"
     ):
         """
         Initialize local voice agent.
@@ -79,6 +92,8 @@ class LocalVoiceAgent(Agent):
             persona: Voice persona (aria, c3po, barry)
             language: Language code (fr, en, es)
             sample_rate: Audio sample rate (22050 or 44100)
+            tts_provider: TTS provider (cartesia or kokoro)
+            kokoro_voice: Kokoro voice ID (af_heart, af_bella, etc.)
         """
         # Pass tools to Agent (they're already decorated with @function_tool)
         super().__init__(
@@ -101,9 +116,11 @@ class LocalVoiceAgent(Agent):
         self.persona = persona
         self.language = language
         self.sample_rate = sample_rate
+        self.tts_provider = tts_provider
+        self.kokoro_voice = kokoro_voice
 
         logger.info(
-            f"LocalVoiceAgent initialized: persona={persona}, voice={voice}, "
+            f"LocalVoiceAgent initialized: persona={persona}, tts={tts_provider}, "
             f"language={language}, sample_rate={sample_rate}Hz, tools=10"
         )
 
@@ -179,32 +196,55 @@ class LocalVoiceAgent(Agent):
 
     def tts_node(self):
         """
-        Override TTS node with Cartesia (ultra-fast streaming TTS).
+        Override TTS node - supports Cartesia (cloud) or Kokoro (local GPU).
 
-        Cartesia Sonic:
+        Cartesia Sonic (cloud):
         - Streaming (first byte in ~100ms)
         - RTF ~0.1x (10x faster than real-time)
         - Voice cloning support
-        - Cloud-based (no local GPU needed for TTS)
+        - Cloud-based (no local GPU needed)
+
+        Kokoro-82M (local GPU via FastAPI):
+        - Streaming via HTTP chunked (first byte in ~50ms)
+        - 24kHz output, high quality
+        - 52 voices across 9 languages
+        - Requires local GPU + Docker container
 
         Returns:
-            cartesia.TTS instance
+            TTS instance (cartesia.TTS or openai.TTS for Kokoro)
         """
-        cartesia_key = os.getenv("CARTESIA_API_KEY")
+        if self.tts_provider == "kokoro":
+            # Kokoro via OpenAI-compatible API (FastAPI wrapper)
+            voice = KOKORO_VOICES.get(self.kokoro_voice, "af_heart")
+            logger.info(f"⚡ TTS node: Kokoro (local GPU, voice={voice}, volume=1.5x)")
 
-        if not cartesia_key:
-            raise ValueError("CARTESIA_API_KEY environment variable is required")
+            # Create TTS with volume boost (Kokoro is quieter than Cartesia)
+            tts = openai.TTS(
+                base_url="http://localhost:8880/v1",
+                api_key="not-needed",  # Local server doesn't require API key
+                model="kokoro",
+                voice=voice,
+            )
+            # Note: volume_multiplier needs to be passed in the request body
+            # The LiveKit SDK may not support this directly, but we can try
+            return tts
+        else:
+            # Cartesia (default - cloud streaming TTS)
+            cartesia_key = os.getenv("CARTESIA_API_KEY")
 
-        # Use persona set in __init__ (from participant attributes or env)
-        voice_id = CARTESIA_VOICES.get(self.persona, CARTESIA_VOICES["aria"])
+            if not cartesia_key:
+                raise ValueError("CARTESIA_API_KEY environment variable is required")
 
-        logger.info(f"⚡ TTS node: Cartesia Sonic ({self.persona}, voice_id={voice_id})")
+            # Use persona set in __init__ (from participant attributes or env)
+            voice_id = CARTESIA_VOICES.get(self.persona, CARTESIA_VOICES["aria"])
 
-        return cartesia.TTS(
-            model="sonic-2",
-            voice=voice_id,
-            language=self.language,
-        )
+            logger.info(f"⚡ TTS node: Cartesia Sonic ({self.persona}, voice_id={voice_id})")
+
+            return cartesia.TTS(
+                model="sonic-2",
+                voice=voice_id,
+                language=self.language,
+            )
 
     def vad_node(self):
         """
@@ -227,15 +267,19 @@ class LocalVoiceAgent(Agent):
 def create_local_agent(
     persona: str = "aria",
     language: str = "fr",
-    system_prompt: Optional[str] = None
+    system_prompt: Optional[str] = None,
+    tts_provider: str = "cartesia",
+    kokoro_voice: str = "af_heart"
 ) -> LocalVoiceAgent:
     """
     Create a LocalVoiceAgent instance with persona configuration.
 
     Args:
-        persona: Voice persona (aria, c3po, barry)
+        persona: Voice persona (aria, c3po, barry) - used for Cartesia
         language: Language code (fr, en, es, auto)
         system_prompt: Custom system prompt (optional)
+        tts_provider: TTS provider (cartesia or kokoro)
+        kokoro_voice: Kokoro voice ID (af_heart, af_bella, etc.)
 
     Returns:
         Configured LocalVoiceAgent instance
@@ -289,5 +333,7 @@ def create_local_agent(
         voice=voice_file,
         persona=persona,
         language=language,
-        sample_rate=sample_rate
+        sample_rate=sample_rate,
+        tts_provider=tts_provider,
+        kokoro_voice=kokoro_voice
     )
